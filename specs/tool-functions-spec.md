@@ -70,7 +70,15 @@ likely match for clean user input. Aliases are the broadest net, so they go last
 *Aliases are stored as a list of strings. How will you check if the normalized input matches any alias in the list? Write your approach in pseudocode or plain English.*
 
 ```
-[your answer here]
+For each plant, build a case-insensitive view of its alias list by lowercasing
+and stripping each alias, then check membership with `in`:
+
+    normalized in (alias.strip().lower() for alias in plant["aliases"])
+
+This treats each alias as a whole string (exact match after normalization), so
+"devil's ivy" matches the "devil's ivy" alias but a partial like "ivy" does not.
+Lowercasing both sides means stored aliases and user input are compared on equal
+footing regardless of the casing/whitespace either was entered with.
 ```
 
 ---
@@ -80,7 +88,13 @@ likely match for clean user input. Aliases are the broadest net, so they go last
 *When a plant isn't found, the agent will read your message and use it to decide what to tell the user. Write the exact string you'll return — make it useful to the agent, not just to a human reading logs.*
 
 ```
-[your answer here]
+"No plant matching '{normalized}' was found in the database. Tell the user this
+plant isn't covered and suggest one of the available plants instead: {available}."
+
+where {available} is the comma-separated list of display names actually in the
+database. This gives the agent two things it needs: confirmation that the lookup
+failed (so it won't hallucinate care data) and the concrete set of plants it CAN
+talk about (so it can offer a real alternative instead of a dead end).
 ```
 
 ---
@@ -91,17 +105,21 @@ likely match for clean user input. Aliases are the broadest net, so they go last
 
 **Test: does `"devil's ivy"` return the pothos entry?**
 ```
-[yes / no — if no, describe what happened]
+yes — matched via the alias list, returned display_name "Pothos".
 ```
 
 **Test: does `"SNAKE PLANT"` return the snake plant entry?**
 ```
-[yes / no — if no, describe what happened]
+yes — lowercasing the input matched the "Snake Plant" display name.
 ```
 
 **One edge case you discovered while implementing:**
 ```
-[your answer here]
+Leading/trailing whitespace ("  Pothos  ") only matches if the input is stripped
+*before* the comparison — strip() and lower() both have to run up front, since the
+direct-key lookup and the display-name/alias comparisons all assume an already-
+normalized value. I also strip()/lower() the stored aliases and display names
+themselves so any stray whitespace in the data doesn't cause a false miss.
 ```
 
 ---
