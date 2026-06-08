@@ -128,4 +128,86 @@ def run_agent(user_message: str, history: list) -> str:
 
     Before writing code, complete specs/agent-loop-spec.md.
     """
-    return "🌱 Agent not yet implemented. Complete Milestone 2 to activate the Plant Advisor."
+    # Build the messages list: system prompt -> replayed history -> new user turn.
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(_history_to_messages(history))
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        # Bounded loop is the safety valve: at most MAX_TOOL_ROUNDS LLM round-trips,
+        # so a tool-happy model can never spin forever.
+        for _ in range(MAX_TOOL_ROUNDS):
+            response = _client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=messages,
+                tools=TOOL_DEFINITIONS,
+                tool_choice="auto",
+            )
+            assistant_message = response.choices[0].message
+
+            # Exit (a): no tool calls means the LLM has a final answer.
+            if not assistant_message.tool_calls:
+                return assistant_message.content or _FALLBACK
+
+            # Tool calls requested: append the assistant message FIRST, then each
+            # tool result — the API matches each result to its call via tool_call_id.
+            messages.append(assistant_message)
+            for tool_call in assistant_message.tool_calls:
+                tool_name = tool_call.function.name
+                try:
+                    tool_args = json.loads(tool_call.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    tool_args = {}
+                # Models sometimes emit `null` or a bare value for no-arg calls;
+                # dispatch_tool expects a dict, so coerce anything else to {}.
+                if not isinstance(tool_args, dict):
+                    tool_args = {}
+                tool_result = dispatch_tool(tool_name, tool_args)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result,
+                })
+
+        # Exit (b): rounds exhausted but the LLM still wants tools. Force a plain-text
+        # answer with the context gathered so far instead of returning tool JSON.
+        final = _client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=messages,
+            tools=TOOL_DEFINITIONS,
+            tool_choice="none",
+        )
+        return final.choices[0].message.content or _FALLBACK
+
+    except Exception as e:  # network error, bad payload, dispatch failure, etc.
+        print(f"  ✗ Agent error: {e}")
+        return _FALLBACK
+
+
+_FALLBACK = (
+    "Sorry — I ran into a problem answering that. Please try rephrasing your "
+    "question, or ask about a specific plant by name."
+)
+
+
+def _history_to_messages(history: list) -> list:
+    """
+    Convert Gradio conversation history into API-format message dicts.
+
+    Gradio 6's ChatInterface passes history in *messages* format — a list of
+    {"role", "content"} dicts. Older Gradio used [user_msg, assistant_msg] pairs.
+    Handle both so the agent is robust to the format actually delivered.
+    """
+    converted = []
+    for item in history or []:
+        if isinstance(item, dict):  # messages format
+            role, content = item.get("role"), item.get("content")
+            if role and isinstance(content, str) and content:
+                converted.append({"role": role, "content": content})
+        elif isinstance(item, (list, tuple)) and len(item) == 2:  # legacy pairs
+            user_msg, assistant_msg = item
+            if user_msg:
+                converted.append({"role": "user", "content": user_msg})
+            if assistant_msg:
+                converted.append({"role": "assistant", "content": assistant_msg})
+    return converted
